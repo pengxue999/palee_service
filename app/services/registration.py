@@ -15,7 +15,7 @@ from app.schemas.registration import (
     RegistrationReceiptFeeItem,
     RegistrationReceiptRequest,
 )
-from app.configs.exceptions import NotFoundException, ConflictException, ValidationException
+from app.configs.exceptions import NotFoundException, ConflictException, ValidationException, ForeignKeyConstraintException
 from app.utils.foreign_key_helper import safe_delete_with_constraint_check
 from app.enums.scholarship import ScholarshipEnum
 from app.enums.registration_status import RegistrationStatusEnum
@@ -701,12 +701,32 @@ def delete(db: Session, registration_id: str):
     db.expire(obj)
 
     from app.models.tuition_payment import TuitionPayment
-    db.query(TuitionPayment).filter(
-        TuitionPayment.registration_id == registration_id
-    ).delete(synchronize_session='fetch')
+    from app.models.evaluation_detail import EvaluationDetail
 
-    db.query(RegistrationDetail).filter(
+    has_evaluation = db.query(EvaluationDetail.regis_detail_id).join(
+        RegistrationDetail,
+        RegistrationDetail.regis_detail_id == EvaluationDetail.regis_detail_id
+    ).filter(
         RegistrationDetail.registration_id == registration_id
-    ).delete(synchronize_session='fetch')
+    ).first()
+
+    if has_evaluation:
+        raise ForeignKeyConstraintException(
+            "ບໍ່ສາມາດລຶບການລົງທະບຽນນີ້ໄດ້ ເນື່ອງຈາກມີການປະເມີນຜົນທີ່ອ້າງອິງຢູ່ ກະລຸນາລຶບການປະເມີນຜົນກ່ອນ"
+        )
+
+    try:
+        db.query(TuitionPayment).filter(
+            TuitionPayment.registration_id == registration_id
+        ).delete(synchronize_session='fetch')
+
+        db.query(RegistrationDetail).filter(
+            RegistrationDetail.registration_id == registration_id
+        ).delete(synchronize_session='fetch')
+    except IntegrityError:
+        db.rollback()
+        raise ForeignKeyConstraintException(
+            "ບໍ່ສາມາດລຶບການລົງທະບຽນນີ້ໄດ້ ເນື່ອງຈາກຍັງມີຂໍ້ມູນອື່ນທີ່ອ້າງອິງຢູ່"
+        )
 
     safe_delete_with_constraint_check(db, obj, "registration")
