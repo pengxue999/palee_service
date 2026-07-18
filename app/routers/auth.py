@@ -1,0 +1,66 @@
+from fastapi import APIRouter
+from sqlalchemy.orm import Session
+from fastapi import Depends
+from app.configs.database import get_db
+from app.configs.security import verify_password, create_access_token
+from app.configs.exceptions import BaseAPIException
+from app.models.user import User
+from app.models.teacher import Teacher
+from app.models.teacher_assignment import TeacherAssignment
+from app.schemas.user import LoginRequest, TokenResponse
+
+router = APIRouter(prefix="/auth", tags=["ການເຂົ້າສູ່ລະບົບ"])
+
+
+@router.post("/login", response_model=TokenResponse)
+def login(data: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.user_name == data.user_name).first()
+
+    if not user or not verify_password(data.user_password, user.user_password):
+        raise BaseAPIException(
+            code="UNAUTHORIZED",
+            message="ຊື່ຜູ້ໃຊ້ ຫຼື ລະຫັດຜ່ານບໍ່ຖືກຕ້ອງ",
+            status_code=401,
+        )
+
+    teacher_id = user.user_name if str(user.role).upper() == 'TEACHER' else None
+
+    has_teacher_info = False
+    has_teaching_info = False
+    if teacher_id is not None:
+        has_teacher_info = (
+            db.query(Teacher.teacher_id)
+            .filter(Teacher.teacher_id == teacher_id)
+            .first()
+            is not None
+        )
+        has_teaching_info = (
+            db.query(TeacherAssignment.assignment_id)
+            .filter(TeacherAssignment.teacher_id == teacher_id)
+            .first()
+            is not None
+        )
+
+        # ອາຈານທີ່ຍັງບໍ່ມີຂໍ້ມູນການສອນ ບໍ່ອະນຸຍາດໃຫ້ເຂົ້າສູ່ລະບົບ.
+        if not has_teaching_info:
+            raise BaseAPIException(
+                code="FORBIDDEN",
+                message="ຂໍອະໄພ ຜູ້ໃຊ້ນີ້ຍັງບໍ່ທັນມີຂໍ້ມູນການສອນ",
+                status_code=403,
+            )
+
+    token = create_access_token({
+        "sub": str(user.user_id),
+        "user_name": user.user_name,
+        "role": user.role,
+    })
+
+    return TokenResponse(
+        access_token=token,
+        user_id=user.user_id,
+        user_name=user.user_name,
+        role=user.role,
+        teacher_id=teacher_id,
+        has_teacher_info=has_teacher_info,
+        has_teaching_info=has_teaching_info,
+    )
