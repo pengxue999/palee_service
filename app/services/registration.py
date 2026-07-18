@@ -29,10 +29,6 @@ import time
 import re
 
 
-MULTI_SUBJECT_MIN_SUBJECTS = 3
-LATE_REGISTRATION_THRESHOLD_DAYS = 60
-
-
 def generate_registration_id(db: Session, academic_id: str) -> str:
     academic_year = db.query(AcademicYear).filter(
         AcademicYear.academic_id == academic_id
@@ -242,6 +238,7 @@ def _is_late_registration(
     db: Session,
     academic_id: str,
     registration_date,
+    threshold_days: int,
 ) -> bool:
     academic_year = db.query(AcademicYear).filter(
         AcademicYear.academic_id == academic_id
@@ -256,7 +253,7 @@ def _is_late_registration(
         return False
 
     late_threshold = academic_year.start_date_at + timedelta(
-        days=LATE_REGISTRATION_THRESHOLD_DAYS
+        days=threshold_days
     )
     return reg_date >= late_threshold
 
@@ -277,15 +274,16 @@ def _select_applicable_discount(
             Discount.discount_description == description.value,
         ).first()
 
-    if non_scholarship_count >= MULTI_SUBJECT_MIN_SUBJECTS:
-        discount = _find(DiscountDescriptionEnum.MULTI_SUBJECT)
-        if discount is not None:
-            return discount
+    # ຄ່າ threshold_value ຖືກກຳນົດໂດຍ admin ຕໍ່ສ່ວນຫຼຸດ/ຕໍ່ສົກຮຽນ.
+    multi = _find(DiscountDescriptionEnum.MULTI_SUBJECT)
+    if multi is not None and non_scholarship_count >= multi.threshold_value:
+        return multi
 
-    if _is_late_registration(db, academic_id, registration_date):
-        discount = _find(DiscountDescriptionEnum.LATE_REGISTRATION)
-        if discount is not None:
-            return discount
+    late = _find(DiscountDescriptionEnum.LATE_REGISTRATION)
+    if late is not None and _is_late_registration(
+        db, academic_id, registration_date, late.threshold_value
+    ):
+        return late
 
     return None
 

@@ -9,7 +9,7 @@ class Registration(Base):
 
     registration_id = Column(String(20), primary_key=True)
     student_id = Column(CHAR(10), ForeignKey("student.student_id", ondelete="CASCADE"), nullable=False)
-    discount_id = Column(CHAR(5), ForeignKey("discount.discount_id", ondelete="SET NULL"), nullable=True)
+    discount_id = Column(CHAR(5), ForeignKey("discount.discount_id", ondelete="RESTRICT"), nullable=True)
     total_amount = Column(DECIMAL(10, 2), nullable=False)
     final_amount = Column(DECIMAL(10, 2), nullable=False)
     status = Column(Enum(RegistrationStatusEnum, values_callable=lambda e: [x.value for x in e]), nullable=False)

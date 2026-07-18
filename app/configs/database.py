@@ -71,8 +71,11 @@ DATABASE_URL: str = _build_database_url()
 engine = create_engine(
     DATABASE_URL,
     echo=False,
+    pool_pre_ping=True,      # validate/reconnect stale connections before use
+    pool_recycle=280,        # recycle before typical idle timeouts (e.g. 300s)
     connect_args=_build_connect_args(),
 )
+
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

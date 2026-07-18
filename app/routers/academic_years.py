@@ -1,7 +1,12 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.configs.database import get_db
-from app.schemas.academic_years import AcademicYearCreate, AcademicYearUpdate, AcademicYearResponse
+from app.schemas.academic_years import (
+    AcademicYearCreate,
+    AcademicYearUpdate,
+    AcademicYearStatusUpdate,
+    AcademicYearResponse,
+)
 from app.configs.response import success_response
 from app.services import academic_years as svc
 
@@ -38,6 +43,14 @@ def update(year_id: str, data: AcademicYearUpdate, db: Session = Depends(get_db)
     return success_response(
         AcademicYearResponse.model_validate(svc.update(db, year_id, data)),
         "ອັບເດດສົກຮຽນສຳເລັດ"
+    )
+
+
+@router.patch("/{year_id}/status")
+def update_status(year_id: str, data: AcademicYearStatusUpdate, db: Session = Depends(get_db)):
+    return success_response(
+        AcademicYearResponse.model_validate(svc.set_status(db, year_id, data.status.value)),
+        "ອັບເດດສະຖານະສົກຮຽນສຳເລັດ"
     )
 
 

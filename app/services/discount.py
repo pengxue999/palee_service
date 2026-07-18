@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from app.models.discount import Discount
+from app.models.registration import Registration
 from app.schemas.discount import DiscountCreate, DiscountUpdate
 from app.configs.exceptions import NotFoundException, ConflictException
 from app.enums.discount_description import DiscountDescriptionEnum
@@ -40,7 +41,8 @@ def create(db: Session, data: DiscountCreate):
         discount_id=discount_id,
         academic_id=data.academic_id,
         discount_amount=data.discount_amount,
-        discount_description=desc_enum.value
+        discount_description=desc_enum.value,
+        threshold_value=data.threshold_value
     )
     db.add(obj)
     try:
@@ -100,5 +102,12 @@ def update(db: Session, discount_id: str, data: DiscountUpdate):
 
 def delete(db: Session, discount_id: str):
     obj = get_by_id(db, discount_id)
+    in_use = db.query(Registration).filter(Registration.discount_id == discount_id).count()
+    if in_use:
+        raise ConflictException("ບໍ່ສາມາດລຶບສ່ວນຫຼຸດນີ້ໄດ້ ເນື່ອງຈາກມີຂໍ້ມູນການລົງທະບຽນອ້າງອີງຢູ່")
     db.delete(obj)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise ConflictException("ບໍ່ສາມາດລຶບສ່ວນຫຼຸດນີ້ໄດ້ ເນື່ອງຈາກມີຂໍ້ມູນການລົງທະບຽນອ້າງອີງຢູ່")

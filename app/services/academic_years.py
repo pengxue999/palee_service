@@ -7,6 +7,7 @@ from app.utils.foreign_key_helper import safe_delete_with_constraint_check
 
 
 ACTIVE_ACADEMIC_STATUS = "ACTIVE"
+ENDED_ACADEMIC_STATUS = "ENDED"
 
 
 def _generate_academic_id(db: Session) -> str:
@@ -20,13 +21,6 @@ def _generate_academic_id(db: Session) -> str:
     return "AY001"
 
 
-def _has_active_academic_year(db: Session, exclude_academic_id: str | None = None) -> bool:
-    query = db.query(AcademicYear).filter(AcademicYear.status == ACTIVE_ACADEMIC_STATUS)
-    if exclude_academic_id:
-        query = query.filter(AcademicYear.academic_id != exclude_academic_id)
-    return query.first() is not None
-
-
 def get_all(db: Session):
     return db.query(AcademicYear).all()
 
@@ -37,16 +31,19 @@ def get_by_id(db: Session, academic_id: str) -> AcademicYear:
         raise NotFoundException("ຂໍ້ມູນສົກຮຽນ")
     return obj
 
-def _end_active_academic_years(db: Session) -> None:
-    db.query(AcademicYear).filter(
-        AcademicYear.status == ACTIVE_ACADEMIC_STATUS
-    ).update({"status": "ENDED"}, synchronize_session="fetch")
+def _end_active_academic_years(db: Session, exclude_academic_id: str | None = None) -> None:
+    query = db.query(AcademicYear).filter(AcademicYear.status == ACTIVE_ACADEMIC_STATUS)
+    if exclude_academic_id:
+        query = query.filter(AcademicYear.academic_id != exclude_academic_id)
+    query.update({"status": ENDED_ACADEMIC_STATUS}, synchronize_session="fetch")
 
 
 def create(db: Session, data: AcademicYearCreate):
     _end_active_academic_years(db)
     academic_id = _generate_academic_id(db)
-    obj = AcademicYear(academic_id=academic_id, **data.model_dump())
+    payload = data.model_dump()
+    payload["status"] = ACTIVE_ACADEMIC_STATUS
+    obj = AcademicYear(academic_id=academic_id, **payload)
     db.add(obj)
     try:
         db.commit()
@@ -58,13 +55,8 @@ def create(db: Session, data: AcademicYearCreate):
 
 def update(db: Session, academic_id: str, data: AcademicYearUpdate):
     obj = get_by_id(db, academic_id)
-    if (
-        data.status == ACTIVE_ACADEMIC_STATUS and
-        _has_active_academic_year(db, exclude_academic_id=academic_id)
-    ):
-        raise ConflictException(
-            "ບໍ່ສາມາດປ່ຽນເປັນສົກຮຽນດໍາເນີນການໄດ້ ເນື່ອງຈາກມີສົກຮຽນດໍາເນີນການຢູ່ແລ້ວ"
-        )
+    if data.status == ACTIVE_ACADEMIC_STATUS:
+        _end_active_academic_years(db, exclude_academic_id=academic_id)
     for field, value in data.model_dump(exclude_none=True).items():
         setattr(obj, field, value)
     try:
@@ -74,6 +66,18 @@ def update(db: Session, academic_id: str, data: AcademicYearUpdate):
     except IntegrityError:
         db.rollback()
         raise ConflictException(f"ສົກຮຽນ '{data.academic_year}' ມີຢູ່ແລ້ວ")
+
+
+def set_status(db: Session, academic_id: str, status: str):
+    obj = get_by_id(db, academic_id)
+    # ຕັ້ງເປັນ ACTIVE ຈະປ່ຽນສົກຮຽນອື່ນເປັນ ENDED ໃຫ້ອັດຕະໂນມັດ
+    # ສ່ວນການປ່ຽນເປັນ ENDED ແມ່ນອະນຸຍາດ ເຖິງແມ່ນຈະບໍ່ເຫຼືອສົກຮຽນດໍາເນີນການກໍຕາມ
+    if status == ACTIVE_ACADEMIC_STATUS:
+        _end_active_academic_years(db, exclude_academic_id=academic_id)
+    obj.status = status
+    db.commit()
+    db.refresh(obj)
+    return obj
 
 
 def delete(db: Session, academic_id: str):

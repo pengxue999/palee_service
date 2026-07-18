@@ -119,9 +119,13 @@ CREATE TABLE discount (
   academic_id          CHAR(5)        NOT NULL,
   discount_amount      DECIMAL(10, 2) NOT NULL,
   discount_description ENUM(
-    'MULTI_SUBJECT',     -- ຮຽນ 3 ວິຊາຂຶ້ນໄປ (Enrolling 3+ subjects)
+    'MULTI_SUBJECT',     -- ຮຽນຫຼາຍວິຊາ (Enrolling 3+ subjects)
     'LATE_REGISTRATION'  -- ລົງທະບຽນຮຽນຊ້າ (Late registration)
   )                                   NOT NULL,
+  -- ຄ່າເງື່ອນໄຂທີ່ admin ກຳນົດເອງ:
+  --   MULTI_SUBJECT     -> ຈຳນວນວິຊາຕ່ຳສຸດ (ເຊັ່ນ 3)
+  --   LATE_REGISTRATION -> ຈຳນວນມື້ຫຼັງເປີດສົກ (ເຊັ່ນ 60)
+  threshold_value      INT            NOT NULL DEFAULT 0,
   PRIMARY KEY (discount_id),
   UNIQUE KEY uq_discount (academic_id, discount_description),
   FOREIGN KEY (academic_id) REFERENCES academic_years (academic_id)
@@ -246,8 +250,9 @@ CREATE TABLE registration (
   PRIMARY KEY (registration_id),
   FOREIGN KEY (student_id)  REFERENCES student  (student_id)
     ON DELETE CASCADE ON UPDATE CASCADE,
-  FOREIGN KEY (discount_id) REFERENCES discount (discount_id)
-    ON DELETE SET NULL ON UPDATE CASCADE
+  CONSTRAINT fk_registration_discount
+    FOREIGN KEY (discount_id) REFERENCES discount (discount_id)
+    ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE = InnoDB;
 
 -- -----------------------------------------------------

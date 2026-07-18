@@ -2,6 +2,8 @@ from pydantic import BaseModel, field_serializer
 from typing import Optional
 from datetime import date
 
+from app.enums.academic_status import AcademicStatusEnum
+
 
 def format_date(value):
     """Format date to YYYY-MM-DD string"""
@@ -16,7 +18,12 @@ class AcademicYearCreate(BaseModel):
     academic_year: str
     start_date_at: date
     end_date_at: date
-    status: str
+    # ສົກຮຽນທີ່ສ້າງໃໝ່ຈະເປັນ ACTIVE ສະເໝີ ແລະ ສົກຮຽນເກົ່າຈະຖືກປ່ຽນເປັນ ENDED
+    status: Optional[str] = None
+
+
+class AcademicYearStatusUpdate(BaseModel):
+    status: AcademicStatusEnum
 
 class AcademicYearUpdate(BaseModel):
     academic_year: Optional[str] = None
