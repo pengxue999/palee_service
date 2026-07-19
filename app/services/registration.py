@@ -8,6 +8,7 @@ from app.models.subject_detail import SubjectDetail
 from app.models.tuition_payment import TuitionPayment
 from app.models.student import Student
 from app.models.district import District
+from datetime import datetime
 from sqlalchemy import select
 from app.schemas.registration import (
     RegistrationCreate, RegistrationUpdate,
@@ -27,6 +28,8 @@ from decimal import Decimal
 from datetime import date, timedelta
 import time
 import re
+from app.models.tuition_payment import TuitionPayment
+from app.models.evaluation_detail import EvaluationDetail
 
 
 def generate_registration_id(db: Session, academic_id: str) -> str:
@@ -262,12 +265,8 @@ def _select_applicable_discount(
     db: Session,
     academic_id: str,
     non_scholarship_count: int,
-    has_scholarship: bool,
-    registration_date,
+    evaluation_date,
 ) -> Discount | None:
-    if has_scholarship:
-        return None
-
     def _find(description: DiscountDescriptionEnum) -> Discount | None:
         return db.query(Discount).filter(
             Discount.academic_id == academic_id,
@@ -275,13 +274,14 @@ def _select_applicable_discount(
         ).first()
 
     # ຄ່າ threshold_value ຖືກກຳນົດໂດຍ admin ຕໍ່ສ່ວນຫຼຸດ/ຕໍ່ສົກຮຽນ.
+    # ວິຊາທີ່ໄດ້ທຶນບໍ່ຖືກນັບເຂົ້າ threshold — ນັບສະເພາະວິຊາທີ່ຕ້ອງຈ່າຍເງິນ.
     multi = _find(DiscountDescriptionEnum.MULTI_SUBJECT)
     if multi is not None and non_scholarship_count >= multi.threshold_value:
         return multi
 
     late = _find(DiscountDescriptionEnum.LATE_REGISTRATION)
     if late is not None and _is_late_registration(
-        db, academic_id, registration_date, late.threshold_value
+        db, academic_id, evaluation_date, late.threshold_value
     ):
         return late
 
@@ -292,19 +292,27 @@ def compute_registration_amounts(
     db: Session,
     items: list[tuple],
     registration_date,
+    *,
+    new_fee_ids: set[str] | None = None,
+    evaluation_date=None,
 ) -> dict:
     """
     Core discount/amount calculation — single source of truth.
 
     items: list of (Fee, ScholarshipEnum) tuples (ALL subjects of the registration).
+    registration_date: ວັນທີລົງທະບຽນຄັ້ງທຳອິດ — ໃຊ້ຕັດສິນວ່າ "ວິຊາເກົ່າ" ລົງຊ້າບໍ.
+    new_fee_ids: ວິຊາທີ່ກຳລັງເພີ່ມໃນຮອບນີ້. None = ລົງທະບຽນຄັ້ງທຳອິດ (ທຸກວິຊາຖືວ່າໃໝ່).
+    evaluation_date: ວັນທີຂອງຮອບນີ້ — ໃຊ້ຕັດສິນວ່າ "ວິຊາໃໝ່" ລົງຊ້າບໍ
+                 (default = registration_date).
+
     ໃຊ້ໄດ້ທັງ preview (ບໍ່ແຕະ DB) ແລະ ຕອນ save.
 
     Returns dict: total_amount, discount_amount, final_amount,
                   discount_id, discount_description.
     """
-    total_amount = Decimal('0')      # ສະເພາະວິຊາທີ່ບໍ່ໄດ້ທຶນ (ໃຊ້ເປັນຖານສ່ວນຫຼຸດນຳ)
+    total_amount = Decimal('0')       # ສະເພາະວິຊາທີ່ບໍ່ໄດ້ທຶນ — ວິຊາທຶນບໍ່ຄິດເງິນ
+    new_subject_amount = Decimal('0')  # ສ່ວນຂອງ total_amount ທີ່ມາຈາກວິຊາໃໝ່
     non_scholarship_count = 0
-    has_scholarship = False
     academic_id = None
 
     for fee, scholarship in items:
@@ -313,10 +321,12 @@ def compute_registration_amounts(
         if academic_id is None:
             academic_id = fee.academic_id
         if scholarship == ScholarshipEnum.SCHOLARSHIP:
-            has_scholarship = True
             continue
-        total_amount += fee.fee or Decimal('0')
+        amount = fee.fee or Decimal('0')
+        total_amount += amount
         non_scholarship_count += 1
+        if new_fee_ids is not None and fee.fee_id in new_fee_ids:
+            new_subject_amount += amount
 
     discount = None
     if academic_id is not None:
@@ -324,16 +334,38 @@ def compute_registration_amounts(
             db,
             academic_id,
             non_scholarship_count,
-            has_scholarship,
-            registration_date,
+            evaluation_date if evaluation_date is not None else registration_date,
         )
 
     discount_amount = Decimal('0')
     if discount is not None:
+        # ຮຽນຫຼາຍວິຊາ → ຄິດຈາກທຸກວິຊາທີ່ຕ້ອງຈ່າຍເງິນ.
+        base = total_amount
+        if (
+            new_fee_ids is not None
+            and discount.discount_description
+            == DiscountDescriptionEnum.LATE_REGISTRATION
+        ):
+            # ລົງທະບຽນຊ້າ: ວິຊາໃດລົງຊ້າ ວິຊານັ້ນໄດ້ສ່ວນຫຼຸດ.
+            # ວິຊາເກົ່າຕັດສິນດ້ວຍວັນທີລົງທະບຽນຄັ້ງທຳອິດ:
+            #   ເກົ່າກໍລົງຊ້າ  → ໄດ້ທັງໝົດ (ວິຊາເກົ່າຮັກສາສ່ວນຫຼຸດທີ່ເຄີຍໄດ້ໄວ້)
+            #   ເກົ່າລົງຕົງເວລາ → ໄດ້ສະເພາະວິຊາໃໝ່
+            existing_subjects_were_late = _is_late_registration(
+                db, academic_id, registration_date, discount.threshold_value
+            )
+            if not existing_subjects_were_late:
+                base = new_subject_amount
+
         percentage = Decimal(str(discount.discount_amount))
-        discount_amount = (total_amount * percentage / Decimal('100')).quantize(
+        discount_amount = (base * percentage / Decimal('100')).quantize(
             Decimal('1')
         )
+
+    # ຖານເປັນ 0 (ເຊັ່ນ ວິຊາໃໝ່ໄດ້ທຶນ) → ບໍ່ມີສ່ວນຫຼຸດຈິງ ຈຶ່ງບໍ່ບັນທຶກ discount_id
+    # ເພື່ອບໍ່ໃຫ້ລາຍງານນັບເປັນການລົງທະບຽນທີ່ໄດ້ສ່ວນຫຼຸດ.
+    if discount_amount <= 0:
+        discount = None
+        discount_amount = Decimal('0')
 
     final_amount = total_amount - discount_amount
     if final_amount < 0:
@@ -350,7 +382,13 @@ def compute_registration_amounts(
     }
 
 
-def _recalculate_registration_amounts(db: Session, registration: Registration):
+def _recalculate_registration_amounts(
+    db: Session,
+    registration: Registration,
+    *,
+    new_fee_ids: set[str] | None = None,
+    evaluation_date=None,
+):
     details = db.query(RegistrationDetail).options(
         joinedload(RegistrationDetail.fee_rel)
     ).filter(
@@ -359,7 +397,11 @@ def _recalculate_registration_amounts(db: Session, registration: Registration):
 
     items = [(d.fee_rel, d.scholarship) for d in details]
     result = compute_registration_amounts(
-        db, items, registration.registration_date
+        db,
+        items,
+        registration.registration_date,
+        new_fee_ids=new_fee_ids,
+        evaluation_date=evaluation_date,
     )
 
     registration.total_amount = result["total_amount"]
@@ -379,15 +421,16 @@ def preview_registration_amounts(
     ລວມວິຊາທີ່ມີຢູ່ DB ແລ້ວ (ກໍລະນີ append) ກັບ ວິຊາໃໝ່ ທີ່ກຳລັງຈະເພີ່ມ
     ເພື່ອໃຫ້ frontend ສະແດງສ່ວນຫຼຸດ ກົງກັບຜົນຕອນບັນທຶກ.
     """
-    from datetime import datetime
-
     if registration_date is None:
         registration_date = datetime.now()
 
-    new_fee_ids = [d.fee_id for d in details]
+    # ວັນທີຂອງຮອບນີ້ (ວັນທີກຳລັງເພີ່ມວິຊາ) — ແຍກຈາກວັນທີລົງທະບຽນຄັ້ງທຳອິດ.
+    evaluation_date = registration_date
+
+    requested_fee_ids = [d.fee_id for d in details]
     fees_by_id = {
         f.fee_id: f
-        for f in db.query(Fee).filter(Fee.fee_id.in_(new_fee_ids)).all()
+        for f in db.query(Fee).filter(Fee.fee_id.in_(requested_fee_ids)).all()
     }
 
     # ວິຊາໃໝ່ທີ່ກຳລັງຈະເພີ່ມ
@@ -406,6 +449,7 @@ def preview_registration_amounts(
 
     # student_id ອາດວ່າງ (ກໍລະນີ preview ກ່ອນສ້າງນັກຮຽນ, ເຊັ່ນ ຟອມລົງທະບຽນສາທາລະນະ) —
     # ໃນກໍລະນີນັ້ນຍັງບໍ່ມີການລົງທະບຽນເກົ່າໃຫ້ merge.
+    new_fee_ids: set[str] | None = None
     if academic_id is not None and student_id:
         existing = find_existing_registration_for_academic_year(
             db, student_id, academic_id
@@ -418,10 +462,18 @@ def preview_registration_amounts(
             ).all()
             for ed in existing_details:
                 items.append((ed.fee_rel, ed.scholarship))
-            # ໃຊ້ registration_date ເດີມ ເພື່ອໃຫ້ການກວດ late ສອດຄ່ອງ
+            # ເພີ່ມວິຊາໃສ່ການລົງທະບຽນເກົ່າ: ກວດເງື່ອນໄຂຊ້າຂອງວິຊາໃໝ່ດ້ວຍວັນທີມື້ນີ້,
+            # ແລະ ຂອງວິຊາເກົ່າດ້ວຍວັນທີລົງທະບຽນຄັ້ງທຳອິດ.
+            new_fee_ids = set(requested_fee_ids)
             registration_date = existing.registration_date
 
-    return compute_registration_amounts(db, items, registration_date)
+    return compute_registration_amounts(
+        db,
+        items,
+        registration_date,
+        new_fee_ids=new_fee_ids,
+        evaluation_date=evaluation_date,
+    )
 
 
 def _recalculate_registration_status(db: Session, registration_id: str):
@@ -465,11 +517,18 @@ def is_registration_locked(db: Session, registration_id: str) -> bool:
     """ຈ່າຍແລ້ວ (paid > 0) → ລັອກການແກ້ໄຂ/ລຶບວິຊາເກົ່າ."""
     return get_total_paid(db, registration_id) > 0
 
-
+ 
 def recompute_registration(db: Session, registration_id: str):
     """
     ຄຳນວນ amount/discount/final + status ຄືນ ຫຼັງມີການແກ້ໄຂ/ລຶບວິຊາ.
     ຖ້າບໍ່ເຫຼືອວິຊາໃດເລີຍ → ລຶບການລົງທະບຽນ.
+
+    ຂໍ້ຈຳກັດ: registration_detail ບໍ່ມີຖັນວັນທີ ຈຶ່ງບໍ່ຮູ້ວ່າວິຊາໃດຖືກເພີ່ມພາຍຫຼັງ —
+    ການຄຳນວນຄືນນີ້ໃຊ້ວັນທີລົງທະບຽນຄັ້ງທຳອິດຢ່າງດຽວ.
+      - ລົງທະບຽນຄັ້ງທຳອິດຊ້າ → ຜົນຄືເກົ່າ (ຖານ = ທຸກວິຊາ) ✓
+      - ລົງທະບຽນຄັ້ງທຳອິດຕົງເວລາ ແລ້ວຄ່ອຍເພີ່ມວິຊາຊ້າພາຍຫຼັງ → ສ່ວນຫຼຸດຊ້າ
+        ຂອງວິຊານັ້ນຈະຫາຍໄປຫຼັງແກ້ໄຂ/ລຶບວິຊາ. ຈະແກ້ໄດ້ຄົບເມື່ອເພີ່ມຖັນ
+        registration_detail.registered_at.
     """
     registration = db.query(Registration).filter(
         Registration.registration_id == registration_id
@@ -509,40 +568,43 @@ def _validate_registration_details(db: Session, student_id: str, details: list, 
     
     # Maximum 3 subjects per request
     if len(details) > 3:
-        raise ValidationException("ນັກຮຽນສາມາດລົງທະບຽນໄດ້ສູງສຸດ 3 ວິຊາຕໍ່ຄັ້ງ")
+        raise ValidationException("ນັກຮຽນສາມາດລົງທະບຽນໄດ້ສູງສຸດ 3 ວິຊາຕໍ່ສົກຮຽນ")
     
     fee_ids = [d.fee_id for d in details]
     if len(fee_ids) != len(set(fee_ids)):
         raise ValidationException("ບໍ່ສາມາດລົງທະບຽນວິຊາດຽວກັນຫຼາຍຄັ້ງໄດ້")
 
-    # ນັກຮຽນຄົນໜຶ່ງໄດ້ຮັບທຶນໄດ້ພຽງ 1 ວິຊາເທົ່ານັ້ນ (ນັບລວມທັງວິຊາເກົ່າ ແລະ ວິຊາໃໝ່).
-    new_scholarship_count = sum(
-        1 for d in details if ScholarshipEnum(d.scholarship) == ScholarshipEnum.SCHOLARSHIP
-    )
-    if new_scholarship_count > 1:
-        raise ValidationException("ນັກຮຽນສາມາດໄດ້ຮັບທຶນໄດ້ພຽງ 1 ວິຊາເທົ່ານັ້ນ")
-    if new_scholarship_count == 1:
-        existing_scholarship = db.query(RegistrationDetail).join(
-            Registration, RegistrationDetail.registration_id == Registration.registration_id
-        ).filter(
-            Registration.student_id == student_id,
-            RegistrationDetail.scholarship == ScholarshipEnum.SCHOLARSHIP,
-        ).first()
-        if existing_scholarship:
-            raise ValidationException("ນັກຮຽນສາມາດໄດ້ຮັບທຶນໄດ້ພຽງ 1 ວິຊາເທົ່ານັ້ນ")
-
     # Verify all fees exist
     fees = db.query(Fee).filter(Fee.fee_id.in_(fee_ids)).all()
     if not fees or len(fees) != len(fee_ids):
         raise ValidationException("ບາງວິຊາບໍ່ມີຂໍ້ມູນ")
-    
+
     # All fees must be from same academic year
     academic_ids_in_request = set(f.academic_id for f in fees)
     if len(academic_ids_in_request) > 1:
         raise ValidationException("ບໍ່ສາມາດລົງທະບຽນວິຊາຈາກບົດຮຽນທີ່ແຕກຕ່າງກັນໄດ້")
-    
+
     request_academic_id = list(academic_ids_in_request)[0]
-    
+
+    # ນັກຮຽນຄົນໜຶ່ງໄດ້ຮັບທຶນໄດ້ພຽງ 1 ວິຊາຕໍ່ສົກຮຽນ (ນັບລວມທັງວິຊາເກົ່າ ແລະ ວິຊາໃໝ່).
+    new_scholarship_count = sum(
+        1 for d in details if ScholarshipEnum(d.scholarship) == ScholarshipEnum.SCHOLARSHIP
+    )
+    if new_scholarship_count > 1:
+        raise ValidationException("ນັກຮຽນສາມາດໄດ້ຮັບທຶນໄດ້ພຽງ 1 ວິຊາຕໍ່ສົກຮຽນເທົ່ານັ້ນ")
+    if new_scholarship_count == 1:
+        existing_scholarship = db.query(RegistrationDetail).join(
+            Registration, RegistrationDetail.registration_id == Registration.registration_id
+        ).join(
+            Fee, RegistrationDetail.fee_id == Fee.fee_id
+        ).filter(
+            Registration.student_id == student_id,
+            Fee.academic_id == request_academic_id,
+            RegistrationDetail.scholarship == ScholarshipEnum.SCHOLARSHIP,
+        ).first()
+        if existing_scholarship:
+            raise ValidationException("ນັກຮຽນສາມາດໄດ້ຮັບທຶນໄດ້ພຽງ 1 ວິຊາຕໍ່ສົກຮຽນເທົ່ານັ້ນ")
+
     # Check if student already registered for any of these fees
     existing_details = db.query(RegistrationDetail).join(
         Registration, RegistrationDetail.registration_id == Registration.registration_id
@@ -609,8 +671,15 @@ def create_bulk(db: Session, data: RegistrationBulkCreate, max_retries: int = 3)
                     db.add(reg_detail)
                 db.flush()
 
-                # Recompute amounts + discount from ALL details (old + new)
-                _recalculate_registration_amounts(db, existing_registration)
+                # Recompute amounts + discount from ALL details (old + new).
+                # ວິຊາໃໝ່ຮອບນີ້ ແລະ ວັນທີມື້ນີ້ ຖືກສົ່ງໄປ ເພື່ອໃຫ້ສ່ວນຫຼຸດ
+                # "ລົງທະບຽນຊ້າ" ຄິດສະເພາະວິຊາໃໝ່ ແລະ ກວດດ້ວຍວັນທີທີ່ເພີ່ມຈິງ.
+                _recalculate_registration_amounts(
+                    db,
+                    existing_registration,
+                    new_fee_ids={d.fee_id for d in data.details},
+                    evaluation_date=data.registration_date,
+                )
 
                 db.commit()
                 db.refresh(existing_registration)
@@ -699,10 +768,6 @@ def delete(db: Session, registration_id: str):
     obj = get_by_id(db, registration_id)
 
     db.expire(obj)
-
-    from app.models.tuition_payment import TuitionPayment
-    from app.models.evaluation_detail import EvaluationDetail
-
     has_evaluation = db.query(EvaluationDetail.regis_detail_id).join(
         RegistrationDetail,
         RegistrationDetail.regis_detail_id == EvaluationDetail.regis_detail_id
