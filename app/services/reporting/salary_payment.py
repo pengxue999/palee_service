@@ -1,9 +1,11 @@
 from typing import Any, Dict, Optional
 
 from openpyxl import Workbook
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.salary_payment import SalaryPayment
+from app.services.salary_payment import get_active_academic_range
 from app.services.reporting.common import (
     apply_excel_title,
     create_csv_writer,
@@ -57,6 +59,13 @@ def get_salary_payment_report(
         joinedload(SalaryPayment.teacher),
         joinedload(SalaryPayment.user),
     )
+
+    start_date, end_date = get_active_academic_range(db)
+    if start_date is not None and end_date is not None:
+        query = query.filter(
+            func.date(SalaryPayment.payment_date) >= start_date,
+            func.date(SalaryPayment.payment_date) <= end_date,
+        )
 
     if month is not None:
         query = query.filter(SalaryPayment.month == month)

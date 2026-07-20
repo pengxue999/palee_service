@@ -92,6 +92,16 @@ def get_active_academic_id(db: Session) -> str | None:
     return active_year.academic_id if active_year else None
 
 
+def get_active_academic_range(db: Session):
+    """Return (start_date, end_date) of the ACTIVE academic year, else (None, None)."""
+    active_year = db.query(AcademicYear).filter(
+        AcademicYear.status == AcademicStatusEnum.ACTIVE
+    ).first()
+    if not active_year:
+        return None, None
+    return active_year.start_date_at, active_year.end_date_at
+
+
 def _resolve_academic_id(db: Session, academic_id: str = None, all_years: bool = False) -> str | None:
     if academic_id is not None or all_years:
         return academic_id
@@ -199,6 +209,12 @@ def get_all(db: Session, teacher_id: str = None, year: int = None, month: int = 
         joinedload(SalaryPayment.teacher),
         joinedload(SalaryPayment.user),
     )
+    start_date, end_date = get_active_academic_range(db)
+    if start_date is not None and end_date is not None:
+        query = query.filter(
+            func.date(SalaryPayment.payment_date) >= start_date,
+            func.date(SalaryPayment.payment_date) <= end_date,
+        )
     if teacher_id:
         query = query.filter(SalaryPayment.teacher_id == teacher_id)
     if year:
