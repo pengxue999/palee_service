@@ -29,7 +29,7 @@ def build_salary_payment_report_context(
     add_filter("ອາຈານ", filters.get("teacher_name"))
     status_filter = filters.get("status")
     if is_pending_salary_status(status_filter):
-        add_filter("ສະຖານະ", "ຄ້າງຈ່າຍ")
+        add_filter("ສະຖານະ", "ຈ່າຍບາງສ່ວນ")
     else:
         add_filter("ສະຖານະ", localize_registration_status(status_filter))
 
@@ -47,11 +47,7 @@ def build_salary_payment_report_context(
                 "amount_display": format_plain_currency(
                     float(payment.get("total_amount") or 0)
                 ),
-                "status": (
-                    "ຄ້າງຈ່າຍ"
-                    if is_pending_salary_status(payment.get("status"))
-                    else localize_registration_status(payment.get("status"))
-                ),
+                "status": localize_registration_status(payment.get("status")),
             }
         )
 

@@ -99,11 +99,7 @@ def get_salary_payment_report(
                     if payment.payment_date
                     else None
                 ),
-                "status": (
-                    "ຄ້າງຈ່າຍ"
-                    if is_pending_salary_status(payment.status)
-                    else localize_registration_status(payment.status)
-                ),
+                "status": localize_registration_status(payment.status),
                 "user_name": user_name,
             }
         )
@@ -119,7 +115,7 @@ def get_salary_payment_report(
             "month_name": _month_name(month),
             "teacher_id": teacher_id,
             "teacher_name": resolve_teacher_name(db, teacher_id),
-            "status": "ຄ້າງຈ່າຍ" if is_pending_salary_status(status) else localize_registration_status(status),
+            "status": "ຈ່າຍບາງສ່ວນ" if is_pending_salary_status(status) else localize_registration_status(status),
         },
         "summary": {
             "total_amount": total_amount,
@@ -210,7 +206,7 @@ def export_salary_payment_report(
             ("ສະຖານະ", report_data["filters"].get("status") or "ທັງໝົດ"),
             ("ຈຳນວນລາຍການ", report_data["total_count"]),
             ("ຈ່າຍແລ້ວ", summary["paid_count"]),
-            ("ຄ້າງຈ່າຍ", summary["pending_count"]),
+            ("ຈ່າຍບາງສ່ວນ", summary["pending_count"]),
             (
                 "ຈຳນວນເງິນລວມ",
                 format_report_currency(summary["total_amount"]),

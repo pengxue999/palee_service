@@ -493,7 +493,10 @@ def _recalculate_registration_status(db: Session, registration_id: str):
     total_paid = float(total_paid)
 
     # Determine status based on payment vs final amount
-    if total_paid == 0:
+    # ບໍ່ມີຍອດຕ້ອງຈ່າຍ (final_amount == 0, ເຊັ່ນ ໄດ້ທຶນ 1 ວິຊາ) → PAID ເລີຍ.
+    if final_amount <= 0:
+        new_status = RegistrationStatusEnum.PAID
+    elif total_paid == 0:
         new_status = RegistrationStatusEnum.UNPAID
     elif total_paid >= final_amount:
         new_status = RegistrationStatusEnum.PAID
@@ -731,6 +734,10 @@ def create_bulk(db: Session, data: RegistrationBulkCreate, max_retries: int = 3)
                 _recalculate_registration_amounts(db, registration)
 
                 db.commit()
+                db.refresh(registration)
+
+                # ຄຳນວນ status ຄືນ: ຖ້າ final_amount == 0 (ໄດ້ທຶນ) → PAID ອັດຕະໂນມັດ.
+                _recalculate_registration_status(db, registration.registration_id)
                 db.refresh(registration)
                 return registration
         
