@@ -1,9 +1,18 @@
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 from app.models.subject import Subject
+from app.models.subject_category import SubjectCategory
 from app.schemas.subject import SubjectCreate, SubjectUpdate
 from app.configs.exceptions import ConflictException, NotFoundException
 from app.utils.foreign_key_helper import safe_delete_with_constraint_check
+
+
+def _ensure_category_exists(db: Session, subject_category_id: str):
+    exists = db.query(SubjectCategory).filter(
+        SubjectCategory.subject_category_id == subject_category_id
+    ).first()
+    if not exists:
+        raise NotFoundException("ໝວດວິຊາ")
 
 def _generate_subject_id(db: Session) -> str:
     last_subject = db.query(Subject).order_by(Subject.subject_id.desc()).first()
@@ -26,6 +35,7 @@ def get_by_id(db: Session, subject_id: str) -> Subject:
 
 
 def create(db: Session, data: SubjectCreate):
+    _ensure_category_exists(db, data.subject_category_id)
     subject_id= _generate_subject_id(db)
     obj = Subject(subject_id=subject_id, **data.model_dump())
     db.add(obj)
@@ -40,7 +50,10 @@ def create(db: Session, data: SubjectCreate):
 
 def update(db: Session, subject_id: str, data: SubjectUpdate):
     obj = get_by_id(db, subject_id)
-    for field, value in data.model_dump(exclude_none=True).items():
+    updates = data.model_dump(exclude_none=True)
+    if "subject_category_id" in updates:
+        _ensure_category_exists(db, updates["subject_category_id"])
+    for field, value in updates.items():
         setattr(obj, field, value)
     try:
         db.commit()

@@ -13,6 +13,7 @@ class SubjectUpdate(BaseModel):
 class SubjectResponse(BaseModel):
     subject_id: str
     subject_name: str
+    subject_category_id: str
     subject_category_name: str
 
     @classmethod
@@ -20,6 +21,7 @@ class SubjectResponse(BaseModel):
         return cls(
             subject_id=obj.subject_id,
             subject_name=obj.subject_name,
+            subject_category_id=obj.subject_category_id,
             subject_category_name=obj.category.subject_category_name
         )
 
